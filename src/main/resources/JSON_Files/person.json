@@ -1,6 +1,6 @@
 {
-  'name': 'vignesh',
-  'age': 34,
-  'married': true,
-  'country': india
+  "name": "vignesh",
+  "age": 34,
+  "married": true,
+  "country": "india"
 }

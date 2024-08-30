@@ -6,6 +6,7 @@ import org.junit.Assert;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -15,7 +16,7 @@ public class Server {
 
     public static final int port = 7000;
 
-    public Properties serverProperties = new Properties();
+    private Properties serverProperties = new Properties();
     private static final Server server = new Server();
 
     private static final ServerUtil serverUtil = new ServerUtil();
@@ -68,17 +69,23 @@ public class Server {
                 InputStream stream = serverUtil.getInputStream(socket);
 
                 String request = readInputFromClient(stream);
+                if(request.trim().isEmpty()){
+                    continue;
+                }
+
+                appendLog("Received request : " + request , LogLevel.INFO);
                 boolean isHttpRequest = isHttpRequest(request);
 
                 OutputStream oStream = serverUtil.getOutputStream(socket);
                 if (!isHttpRequest) {
                     returnErrorResponseToClient(oStream);
-                    serverUtil.safeCloseSocket(socket);
                 } else {
                     appendLog("Handling HTTP Request ", LogLevel.INFO);
                     respondHttpDataToClient(request, oStream);
                     appendLog("Completed HTTP Request ", LogLevel.INFO);
                 }
+                serverUtil.safeCloseSocket(socket);
+                appendLog("=======> Server Completed Serving Request <========= ", LogLevel.INFO);
             }
         }catch (IOException e){
             appendLog("Input to Output Stream failed. Unable to handle the request. Internal Server Error.",LogLevel.ERROR);
@@ -86,9 +93,7 @@ public class Server {
         }catch (Exception e){
             appendLog("Unable to handle the request. Internal Server Error.",LogLevel.ERROR);
             e.printStackTrace(System.err);
-
         }
-
     }
 
 
@@ -96,18 +101,19 @@ public class Server {
      *@Param oStream : The output stream to write the response to
      *@Throws IOException : If there is an error writing to the output stream
      */
-    private void returnErrorResponseToClient(OutputStream oStream) throws IOException {
-        PrintWriter writer = new PrintWriter(oStream, true);
+    private void returnErrorResponseToClient(OutputStream writer) throws IOException {
         StringBuilder builder = new StringBuilder();
         builder.append(ServerConstants.BAD_REQUEST)
                 .append(ServerConstants.NEW_LINE)
+                .append(ServerConstants.CONTENT_TYPE)
                 .append(ServerConstants.CONTENT_TYPE_JSON)
                 .append(ServerConstants.NEW_LINE)
                 .append(ServerConstants.CONTENT_LENGTH)
                 .append(ServerConstants.HTTP_METHOD_ONLY_SUPPORTED.length())
                 .append(ServerConstants.NEW_LINE)
+                .append(ServerConstants.NEW_LINE)
                 .append(ServerConstants.HTTP_METHOD_ONLY_SUPPORTED);
-        writer.write(builder.toString());
+        writer.write(builder.toString().getBytes());
         writer.flush();
         writer.close();
     }
@@ -172,6 +178,9 @@ public class Server {
         StringBuffer response = new StringBuffer(); //Thread safety
         String line = null;
         while ((line = (buffReader.readLine())) != null) {
+            if (line.isEmpty()) {
+                break; // End of headers
+            }
             response.append(line);
             response.append("\n");
         }
@@ -192,12 +201,12 @@ public class Server {
         String httpStatus = ServerConstants.REQUEST_OK;
         if(response == null){
             response = sendBadResponse(path);
-            httpStatus = ServerConstants.BAD_REQUEST;
+        }else{
+            response = getResponseToHttpClient(ServerConstants.CONTENT_TYPE_JSON, httpStatus,response);
         }
-        PrintWriter writer = new PrintWriter(oStream, true);
-        String responseToClient = getResponseToHttpClient(ServerConstants.CONTENT_TYPE_JSON, httpStatus,response);
-        writer.write(responseToClient);
-        writer.flush();
+        oStream.write(response.getBytes());
+        oStream.flush();
+        oStream.close();
     }
 
 
@@ -207,10 +216,10 @@ public class Server {
      * @Return String : The content of the json file
      * @Throws IOException : If there is an error reading the json file
     * */
-    private String readJsonFile(String path) throws IOException {
+    private String readJsonFile(String jsonFileNameProperty) throws IOException {
         String jsonData = null;
         String pathStr = getJsonFileDirectory();
-        String fileName = serverProperties.getProperty(path);
+        String fileName = serverProperties.getProperty(jsonFileNameProperty);
         if(fileName != null) {
             Path pathObj = Paths.get(pathStr, fileName);
             boolean isFileExists = Files.exists(pathObj);
@@ -223,7 +232,7 @@ public class Server {
         return jsonData;
     }
 
-    private String getJsonFileDirectory(){
+    private String getJsonFileDirectory() throws IOException {
         String mappingPath = serverProperties.getProperty("json.file.location");
         if(mappingPath == null){
             appendLog("JSON file location not found in server.properties. Moving back to default path", LogLevel.INFO);
@@ -235,7 +244,8 @@ public class Server {
             if(mappingPath.startsWith("./")){
                 appendLog("JSON file location found in server.properties but its mapped class file path. So trying to locate", LogLevel.INFO);
                 mappingPath = mappingPath.replaceFirst("./","");
-                mappingPath =Server.class.getClassLoader().getResource(mappingPath).getPath().replaceFirst("/", "");
+                URL url =Server.class.getClassLoader().getResource(mappingPath);
+                mappingPath = (url != null) ?url.getPath().replaceFirst("/", ""):null;
                 appendLog(" Final path of mapped location :" + mappingPath, LogLevel.INFO);
             }else {
                 appendLog("JSON file location found in server.properties but noticed it with absolute path", LogLevel.INFO);
@@ -250,19 +260,18 @@ public class Server {
     * */
     private String sendBadResponse(String path) {
         StringBuffer buffer = new StringBuffer();
-        buffer.append(ServerConstants.BAD_REQUEST);
-        buffer.append(ServerConstants.NEW_LINE);
-        buffer.append(ServerConstants.CONTENT_TYPE_JSON);
-        buffer.append(ServerConstants.NEW_LINE);
-        buffer.append(ServerConstants.CONTENT_LENGTH);
-        buffer.append(ServerConstants.HTTP_NO_MAPPING_FOUND.length());
-        buffer.append(ServerConstants.NEW_LINE);
-        buffer.append(ServerConstants.HTTP_NO_MAPPING_FOUND);
+        buffer.append(ServerConstants.BAD_REQUEST)
+        .append(ServerConstants.NEW_LINE)
+        .append(ServerConstants.CONTENT_TYPE)
+        .append(ServerConstants.CONTENT_TYPE_JSON)
+        .append(ServerConstants.NEW_LINE)
+        .append(ServerConstants.CONTENT_LENGTH)
+        .append(ServerConstants.HTTP_NO_MAPPING_FOUND.length())
+        .append(ServerConstants.NEW_LINE)
+        .append(ServerConstants.NEW_LINE)
+        .append(ServerConstants.HTTP_NO_MAPPING_FOUND);
         return buffer.toString();
     }
-
-
-
 
     /*
      * Response looks like the below example :
@@ -274,14 +283,14 @@ public class Server {
      * */
     private String getResponseToHttpClient(String contentType, String httpStatusCode, String payload) {
         StringBuffer buffer = new StringBuffer();
-        buffer.append("HTTP/1.1  ");
-        buffer.append(httpStatusCode);
-        buffer.append(ServerConstants.NEW_LINE);
-        buffer.append(ServerConstants.CONTENT_TYPE + contentType);
-        buffer.append(ServerConstants.NEW_LINE);
-        buffer.append(ServerConstants.CONTENT_LENGTH + payload.length());
-        buffer.append(ServerConstants.NEW_LINE);
-        buffer.append(payload);
+        buffer.append(httpStatusCode)
+        .append(ServerConstants.NEW_LINE)
+        .append(ServerConstants.CONTENT_TYPE + contentType)
+        .append(ServerConstants.NEW_LINE)
+        .append(ServerConstants.CONTENT_LENGTH + payload.length())
+        .append(ServerConstants.NEW_LINE)
+        .append(ServerConstants.NEW_LINE)
+        .append(payload);
         return buffer.toString();
     }
 
@@ -300,5 +309,10 @@ public class Server {
 
     public static void main(String[] args) throws Exception {
         start();
+    }
+
+    /*Getter method for serverProperties.*/
+    public Properties getServerProperties() {
+        return serverProperties;
     }
 }
