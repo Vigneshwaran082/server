@@ -1,6 +1,6 @@
 **Server Purpose**
 
-This server acts as a fallback solution for the front-end team, providing predefined responses when the back-end server is unavailable or down.
+This **light-weight** server acts as a fallback solution for the front-end team, providing predefined responses when the back-end server is unavailable or down.
 
 **How It Works**
 
